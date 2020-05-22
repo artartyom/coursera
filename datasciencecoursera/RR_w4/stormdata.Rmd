@@ -1,0 +1,198 @@
+---
+title: "Analysis of consequences of adverse weather events"
+author: "Artem Shevlyakov"
+date: "02/02/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Synopsis
+
+This document analyzes the data on adverse weather events in the USA in the years 1950-2011 and tries to outline the most harmful ones in respect to population health and economics. The analysis accounts for the frequency of event occurrence and its effects (i.e. damage, fatalities or injuries inflicted). 
+
+## Summary
+
+The results show that, from the purely economical standpoint, floods and flash floods, tornadoes and hails present the most danger. Population health is mostly affected by excessive heat, flash floods and tornadoes. Both factors considered, flash floods and floods, and tornadoes, might be highlighted as most significant, as they occur regularly and inflict both massive infrastructure damage and a high number of injuries and fatalities. Several other events may inflict more damage or cause higher fatalities, but not both, and their irregularity lowers their overall significance as they cannot be accounted for properly.
+
+## Data Processing
+
+Before any analysis can be performed, all the required libraries and the data need to be loaded.
+
+```{r, message=FALSE, results=FALSE}
+library(data.table)
+library(dplyr)
+library(ggpubr)
+library(ggplot2)
+```
+
+```{r, cache=TRUE}
+if(!file.exists("stormdata.bz2")){
+  download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",
+              "stormdata.bz2")
+}
+stormdata<-fread("stormdata.bz2")
+```
+
+The dataset is large. We're going to extract only the columns we need for analysis and discard all the rest. Every single entry is going to be treated as a separate event. To perform the comparison, the data on the occurrence date, type of event and associated injury/fatality and damage statistics are required.
+
+```{r, results=FALSE}
+stormsub <- select(stormdata, EVTYPE, BGN_DATE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+rm(stormdata); gc()
+```
+```{r}
+head(stormsub)
+```
+
+Information on the extent of damage that is currently split into several columns needs to be joined. To do that, "K"/"M"/"B" notation should be converted into the actual numbers, and crop and property damage should be summarized. 
+
+After convertion, the value in the `DMGEXP` fields will indicate the factors of 10. We will only use the observations with the correct entries in the `DMGEXP` fields: that is, "K", "M", "B" or nothing at all.
+
+The data should also be filtered so that only relevant records (i.e. resulting in at least one fatality/injury or property/crop damage) remain.
+
+```{r}
+stormsub <- stormsub %>% 
+    filter((grepl("[kKmMbB]", stormsub$PROPDMGEXP)|grepl("^$", stormsub$PROPDMGEXP))&
+               (grepl("[kKmMbB]", stormsub$CROPDMGEXP)|grepl("^$", stormsub$CROPDMGEXP))) %>%
+    filter(PROPDMG>0|CROPDMG>0|INJURIES>0|FATALITIES>0) %>%
+    mutate(PROPDMGEXP=toupper(PROPDMGEXP),
+           CROPDMGEXP=toupper(CROPDMGEXP)) %>%
+    mutate(PROPDMGEXP=(as.numeric(factor(PROPDMGEXP, levels = c("","K","M","B"))
+                                  )-1)*3,
+           CROPDMGEXP=(as.numeric(factor(CROPDMGEXP, levels = c("","K","M","B"))
+                                  )-1)*3) %>%
+    mutate(PROPDMGABS=PROPDMG*10^PROPDMGEXP,
+           CROPDMGABS=CROPDMG*10^CROPDMGEXP,
+           TOTALDMG=PROPDMGABS+CROPDMGABS) %>%
+    select(EVTYPE, BGN_DATE, FATALITIES, INJURIES, TOTALDMG)
+head(stormsub)
+```
+
+To better understand the dynamics, all the data shall be grouped by year.
+
+```{r}
+stormsub$BGN_DATE <- format(as.Date(stormsub$BGN_DATE, format="%m/%d/%Y %H:%M:%S"), "%Y")
+eventbyyear <- dcast(as.data.table(stormsub), 
+                  BGN_DATE+EVTYPE~., 
+                  value.var=c("TOTALDMG","INJURIES","FATALITIES"), 
+                  fun.aggregate=sum)
+eventbyyear$EVCOUNT <- dcast(as.data.table(stormsub),
+                 BGN_DATE+EVTYPE~.,
+                 fun.aggregate = length)$.
+head(eventbyyear)
+```
+
+Since there are numerous types of reported events, we shall select the most dangerous ones. To do that, we will calculate the amount of damage, fatalities and injuries inflicted over the observation period, and select the top 10 events for each category.
+
+```{r}
+topdamage <- tapply(eventbyyear$TOTALDMG, eventbyyear$EVTYPE, FUN = sum)
+topfatality <- tapply(eventbyyear$FATALITIES, eventbyyear$EVTYPE, FUN = sum)
+topinjury <- tapply(eventbyyear$INJURIES, eventbyyear$EVTYPE, FUN = sum)
+topdamage <- sort(topdamage, decreasing = TRUE)[1:10]
+topfatality <- sort(topfatality, decreasing = TRUE)[1:10]
+topinjury <- sort(topinjury, decreasing = TRUE)[1:10]
+
+combined <- eventbyyear %>% 
+    filter(EVTYPE %in% names(topdamage) | EVTYPE %in% names(topinjury)|EVTYPE %in% names(topfatality)) %>% 
+    arrange(BGN_DATE, EVTYPE)
+```
+
+## Results
+
+First, let's see how frequent are the most destructive events that were selected earlier.
+
+```{r}
+p1 <- ggplot(data=combined, 
+             aes(x=as.Date(BGN_DATE, format="%Y"), y=EVCOUNT)) +geom_col(
+                 aes(fill=EVTYPE), col='black') + labs(
+                         title="Events by number of occurrences",
+                         x="Year",
+                         y="Number of events"
+                     )
+p2 <- ggplot(data=combined, 
+             aes(x=as.Date(BGN_DATE, format="%Y"), y=EVCOUNT)) +geom_col(
+                 aes(fill=EVTYPE), col='black', position="fill") + labs(
+                         title="Proportions of events",
+                         x="Year",
+                         y="Proportion of events"
+                     )
+
+ggarrange(p1, p2, ncol=2, common.legend = TRUE, legend="bottom")
+```
+
+It can be seen that tornadoes used to dominate the statistic up until the 1990s. From that time onwards, there is no clear leader, however, several types of events still tend to occur regularly. These are tornadoes, thunderstorm winds, lightning, heat and floods (including flash floods). Let's recall which of these mostly affect infrastructure and which mostly affect health.
+
+```{r}
+list(Fatalities=topfatality, Injuries=topinjury, Damage=topdamage)
+```
+
+It seems that tornadoes and flash floods affect both infrastructure and health, floods mostly affect the economy and thunderstorm winds, lightning and heat mostly affect people's health. It should be noted that some events (such as HURRICANE/TYPHOON or STORM SURGE) can inflict enormous damage but are very rare (as seen from the graph).
+
+Let's plot a graph which will help us analyze the impact of weather on people's health. Since the data from the 1990s onwards are much more complete, we are only going to use this time period. First let's estimate a .975 quantile of fatalities and injuries to understand which boundaries to use for our graphs.
+
+```{r}
+injfataldata <- filter(combined, (EVTYPE=="TORNADO"|EVTYPE=="EXCESSIVE HEAT"|EVTYPE=="HEAT"|EVTYPE=="LIGHTNING"|EVTYPE=="FLASH FLOOD"|EVTYPE=="TSTM WIND")&BGN_DATE>=1990)
+c("Injuries"=quantile(injfataldata$INJURIES, 0.975),
+  "Fatalities"=quantile(injfataldata$FATALITIES, 0.975))
+```
+
+For the ease of scaling, let's use 2000 and 300 as our cutoff points for the graph.
+
+```{r}
+p3 <- ggplot(data=injfataldata, 
+             aes(x=INJURIES, y=FATALITIES)) +geom_point(
+                 aes(fill=EVTYPE), shape=21)+ theme(
+                     legend.position = "bottom") + labs(
+                         title="Fatalities and injuries",
+                         x="Number of injuries",
+                         y="Number of fatalities")+coord_cartesian(xlim=c(0,2000), ylim=c(0,300))
+p4 <- ggplot(data=injfataldata, 
+             aes(x=as.Date(BGN_DATE, format="%Y"), y=EVCOUNT)) +geom_col(
+                 aes(fill=EVTYPE), col='black', position="fill") + labs(
+                         title="Proportions of occurrences",
+                         x="Year",
+                         y="Proportion of events"
+                     )
+ggarrange(p4, p3, ncol=2, common.legend = TRUE, legend="bottom")
+```
+
+A distinct pattern can be observed: heat and excessive heat result in a high number of deaths. Another disaster that tends to cause a lot of  fatalities is flash flood, probably due to its suddenness. Tornadoes tend to inflict the most injuries.
+
+The relative occurrences graph makes it clear that heat and excessive heat are relatively rare. However, tornadoes and flash floods form a significant share of reported adverse weather events each year.
+
+Now let's take a look at the economical impact produced by some of the most common and most destructive events (as established previously).
+
+```{r}
+damagedata <- filter(combined, (EVTYPE=="TORNADO"|EVTYPE=="FLOOD"|EVTYPE=="FLASH FLOOD"|EVTYPE=="HURRICANE/TYPHOON"|EVTYPE=="STORM SURGE"|EVTYPE=="HAIL")&BGN_DATE>=1990)
+p5 <- ggplot(data=damagedata, 
+             aes(x=as.Date(BGN_DATE, format="%Y"), y=TOTALDMG)) +geom_col(
+                 aes(fill=EVTYPE), col='black', position="fill") + labs(
+                         title="Proportions of damage inflicted",
+                         x="Year",
+                         y="Proportion of damage inflicted"
+                     )
+p6 <- ggplot(data=damagedata, 
+             aes(x=as.Date(BGN_DATE, format="%Y"), y=EVCOUNT)) +geom_col(
+                 aes(fill=EVTYPE), col='black', position="fill") + labs(
+                         title="Proportions of occurrences",
+                         x="Year",
+                         y="Proportion of events"
+                     )
+ggarrange(p6, p5, ncol=2, common.legend = TRUE, legend="bottom")
+```
+
+As can be seen from the graph, tornadoes, floods and flash floods, and hails tend to occur very regularly and compose most of the reported events. These events inflict comparable shares of economical damage, with floods and flash floods on the higher end of the scale. Hurricanes and storm surges can cause spikes in the amount of losses, but, as said previously, they tend to be rare and do not carry the main economic burden.
+
+It should be noted that, although hails cause major economical damage, they do not inflict a lot of casualties. It is, therefore, flash floods and floods, as well as tornadoes, that seem to present the most danger in terms of combined economical burden and health threat. These categories of events have been regularly reported in the last 30 years and tend to inflict both serious damage to infrastrure and a high number of fatalities and injuries.
+
+## Conclusion
+
+The performed analysis allows to state the following:
+
+1. Floods and flash floods are the most significant weather events in terms of damage dealt to economy. They tend to occur regularly and inflict enormous damage. The other significant types of events that inflict major infrastructure and/or crop damage are tornadoes and hails.
+
+2. Heat and extreme heat are the most significant adverse weather event in terms of mortality. However, they are quite rare. The third most significant group of events is tornadoes, which occur quite often. Flash floods also tend to cause fatalities, but almost no injuries, which might be linked to the suddenness of their onset.
+
+3. Flash floods and floods, and tornadoes, may be highlighted as the most significant events in terms of combined health and economical damage.

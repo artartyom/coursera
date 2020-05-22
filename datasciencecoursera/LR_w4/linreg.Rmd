@@ -1,0 +1,81 @@
+---
+title: 'Regression Models: Week 4 PGA'
+author: "Artem Shevlyakov"
+date: "16/02/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+Although at first it seems that transmission type influences the mileage per gallon, it is in fact wrong. Adjustment for weight and cylinder count shows that these variables are the important ones. It's impossible to answer which type of transmission is better for MPG and quantify the difference, as it is statistically insignificant.
+
+## Exploratory data analysis and transformation
+
+Let's load the `mtcars` dataset and look at it briefly. What are the columns made up of? Are there any missing values?
+
+```{r}
+data(mtcars)
+head(mtcars)
+sapply(mtcars, class)
+any(is.na(mtcars))
+```
+
+It seems that the dataset is complete, no values are missing. However, some of the variables indicated as numeric should really be treated as factors.
+
+## Model selection
+
+We are going to use `am` (remember it's a factor now!) as the independent variable and `mpg` as the regression. Since `mpg` is continuous, and there's no rate involved, we are going to perform linear regression.
+
+```{r}
+model1 <- lm(mpg~as.factor(am), mtcars)
+summary(model1)$coef
+```
+
+It seems that automatic transmission yields about 17.15 miles per gallon of gas, and manual transmission (encoded as `am==1`) is associated with a 7.245 miles higher mileage per a gallon of gas for a total of about 24.4 miles per gallon. However, there are other factors which may affect mileage that this model does not account for, namely, mass and cylinder count. Let's adjust for these variables.
+
+```{r}
+model2.wt.add <- lm(mpg~as.factor(am)+wt, mtcars)
+model3.wtcyl.add <- lm(mpg~as.factor(am)+wt+as.factor(cyl), mtcars)
+anova(model1, model2.wt.add, model3.wtcyl.add)
+```
+
+From the F-statistic it seems that the model adjusted for weight is better that the first one, and the model adjusted for both weight and number of cylinders is even better than the second one (probability of error p<0.01 in both cases). Let's see if the type of transmission remains a significant factor influencing mileage in the adjusted model.
+
+```{r}
+summary(model3.wtcyl.add)$coef
+```
+
+The model indicates that with the number of cylinders and type of transmission held constant, each 1000 lbs increase in weight results in 3.15 decrease in mileage per gallon. With the weight and type of transmission held constant, 6-cylinder engines decrease mileage by 4.26 miles, and 8-cylinder by 6.08 miles, compared to the 4-cylinder engines.
+
+While the coefficients for the number of cylinders and weight are statistically significant, the coefficient for the transmission is not. This means that we cannot reject the null hypothesis that there is no difference between manual and automatic transmission in terms of mileage per gallon when the weight and the number of cylinders are held constant. Do we even need this variable in our model?
+
+```{r}
+model.noam <- lm(mpg~wt+as.factor(cyl), mtcars)
+anova(model.noam, model3.wtcyl.add)$"Pr(>F)"[2]
+```
+
+According to the statictic, there's no statistically significant difference between the models with and without `am` as predictor. Therefore, we can conclude that it does not affect mileage and should not be included in the final model. It's the weight and the number of cylinders that affect the mileage, not the type of transmission.
+
+The same conclusion can be made after looking at the residual plots of the two models presented in the appendix. 
+Both plots are very similar, which confirms that there is no significant difference between the two models. The one with less variables should be used. There is no clear pattern to the residuals, so we cannot assume that there are other factors significantly influencing mileage per gallon apart from weight and the number of cylinders.
+
+## Appendix: Plots
+
+### Plot 1. Comparison of the residual plots of models including and excluding transmission type
+```{r, echo=FALSE}
+par(mfrow=c(1,2))
+plot(predict(model3.wtcyl.add, wt=mtcars$wt), rstandard(model3.wtcyl.add), 
+     main="Including transmission type",
+     xlab="Predicted MPG",
+     ylab="Standardized residual")
+plot(predict(model.noam, wt=mtcars$wt), rstandard(model.noam), 
+     main="Excluding transmission type",
+     xlab="Predicted MPG",
+     ylab="Standardized residual")
+```
